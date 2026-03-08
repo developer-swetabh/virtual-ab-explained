@@ -1,0 +1,2154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virtual A/B OTA Update — AOSP Deep Dive</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #080c10;
+    --bg2:       #0d1117;
+    --bg3:       #161b22;
+    --bg4:       #1c2330;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --green:     #3fb950;
+    --green-dim: #1a3a20;
+    --cyan:      #39d0d8;
+    --cyan-dim:  #0d2f33;
+    --orange:    #f0883e;
+    --orange-dim:#3a2010;
+    --purple:    #a371f7;
+    --purple-dim:#2d1f4a;
+    --red:       #f85149;
+    --red-dim:   #3a1515;
+    --yellow:    #e3b341;
+    --yellow-dim:#332a00;
+    --blue:      #58a6ff;
+    --blue-dim:  #0d2040;
+    --pink:      #ff7eb3;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #0d1b2a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 2rem 2rem 1.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .header-top {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.2rem;
+  }
+  .header-badge {
+    background: var(--green-dim);
+    border: 1px solid var(--green);
+    color: var(--green);
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.2rem 0.6rem;
+    border-radius: 20px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .header h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .header h1 span { color: var(--green); }
+  .header-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-left: auto;
+  }
+
+  /* ── NAV TABS ── */
+  .nav-tabs {
+    display: flex;
+    gap: 0.25rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav-tabs::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    padding: 0.45rem 0.9rem;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .tab-btn:hover { color: var(--text); border-color: var(--border); }
+  .tab-btn.active {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green);
+    font-weight: 600;
+  }
+
+  /* ── MAIN CONTENT ── */
+  .content { padding: 2rem; max-width: 1400px; margin: 0 auto; }
+
+  .section { display: none; }
+  .section.active { display: block; animation: fadeIn 0.3s ease; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ── SHARED COMPONENTS ── */
+  .section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 800;
+    margin-bottom: 0.4rem;
+    letter-spacing: -0.02em;
+  }
+  .section-sub {
+    color: var(--muted);
+    font-size: 0.75rem;
+    margin-bottom: 2rem;
+    line-height: 1.6;
+  }
+
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.4rem;
+    margin-bottom: 1.2rem;
+  }
+  .card-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .card-title .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.2rem; }
+
+  /* ── CODE BLOCKS ── */
+  .code-block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    font-size: 0.72rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+    color: #c9d1d9;
+  }
+  .code-block .cm { color: var(--muted); }
+  .code-block .ck { color: var(--purple); }
+  .code-block .cv { color: var(--cyan); }
+  .code-block .cs { color: var(--green); }
+  .code-block .cn { color: var(--orange); }
+  .code-block .ce { color: var(--red); }
+
+  /* ── BADGES ── */
+  .badge {
+    display: inline-block;
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .badge-green  { background: var(--green-dim);  color: var(--green);  border: 1px solid var(--green); }
+  .badge-orange { background: var(--orange-dim); color: var(--orange); border: 1px solid var(--orange); }
+  .badge-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid var(--purple); }
+  .badge-cyan   { background: var(--cyan-dim);   color: var(--cyan);   border: 1px solid var(--cyan); }
+  .badge-red    { background: var(--red-dim);    color: var(--red);    border: 1px solid var(--red); }
+  .badge-blue   { background: var(--blue-dim);   color: var(--blue);   border: 1px solid var(--blue); }
+  .badge-yellow { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow); }
+
+  /* ── INFO ROWS ── */
+  .info-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.8rem;
+    padding: 0.7rem 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.75rem;
+    line-height: 1.6;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-row .label {
+    color: var(--muted);
+    min-width: 160px;
+    flex-shrink: 0;
+    font-size: 0.7rem;
+  }
+
+  /* ── COMPARISON TABLE ── */
+  table { width: 100%; border-collapse: collapse; font-size: 0.73rem; }
+  th {
+    background: var(--bg3);
+    color: var(--muted);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.7rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--border);
+    line-height: 1.5;
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg3); }
+
+  /* ── LAYER STACK ── */
+  .layer-stack { display: flex; flex-direction: column; gap: 0; }
+  .layer {
+    padding: 0.9rem 1.2rem;
+    border: 1px solid;
+    border-radius: 0;
+    font-size: 0.73rem;
+    position: relative;
+    transition: all 0.2s;
+    cursor: default;
+  }
+  .layer:first-child { border-radius: 8px 8px 0 0; }
+  .layer:last-child  { border-radius: 0 0 8px 8px; }
+  .layer:not(:last-child) { border-bottom: none; }
+  .layer:hover { filter: brightness(1.15); z-index: 1; }
+  .layer .layer-name { font-weight: 700; font-size: 0.78rem; }
+  .layer .layer-path { font-size: 0.68rem; opacity: 0.7; margin-top: 0.2rem; }
+  .layer .layer-desc { font-size: 0.68rem; opacity: 0.8; margin-top: 0.3rem; }
+  .layer-arrow {
+    text-align: center;
+    color: var(--muted);
+    font-size: 1rem;
+    padding: 0.1rem 0;
+    line-height: 1;
+  }
+
+  /* ── STATE MACHINE ── */
+  .state-flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 1rem 0;
+  }
+  .state-node {
+    background: var(--bg3);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    padding: 0.7rem 1rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-align: center;
+    min-width: 100px;
+    flex-shrink: 0;
+    transition: all 0.3s;
+    cursor: pointer;
+  }
+  .state-node:hover, .state-node.active-state {
+    border-color: var(--green);
+    background: var(--green-dim);
+    color: var(--green);
+  }
+  .state-node .state-label { font-size: 0.6rem; color: var(--muted); margin-top: 0.2rem; font-weight: 400; }
+  .state-arrow {
+    color: var(--muted);
+    font-size: 0.8rem;
+    padding: 0 0.3rem;
+    flex-shrink: 0;
+  }
+
+  /* ── TIMELINE ── */
+  .timeline { position: relative; }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 20px;
+    top: 0; bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--green), var(--cyan), var(--purple), var(--orange));
+  }
+  .tl-item {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+    position: relative;
+  }
+  .tl-dot {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 2px solid;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    z-index: 1;
+    background: var(--bg);
+  }
+  .tl-body {
+    flex: 1;
+    padding-bottom: 0.5rem;
+  }
+  .tl-phase {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.3rem;
+    font-weight: 600;
+  }
+  .tl-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+  }
+  .tl-desc { font-size: 0.73rem; color: var(--muted); line-height: 1.7; margin-bottom: 0.8rem; }
+
+  /* ── COW OPS ── */
+  .cow-op {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.8rem;
+  }
+  .cow-op-header {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 0.6rem;
+  }
+  .cow-op-name {
+    font-weight: 700;
+    font-size: 0.8rem;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .cow-op-desc { font-size: 0.72rem; color: var(--muted); line-height: 1.6; }
+  .cow-op-example {
+    background: var(--bg);
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.68rem;
+    margin-top: 0.6rem;
+    color: var(--cyan);
+    white-space: pre;
+  }
+
+  /* ── INTERACTIVE FLOW ── */
+  .flow-container {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .flow-header {
+    background: var(--bg3);
+    padding: 1rem 1.4rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .flow-title { font-size: 0.8rem; font-weight: 700; }
+  .flow-controls { display: flex; gap: 0.6rem; align-items: center; }
+  .flow-btn {
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    padding: 0.4rem 0.9rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .flow-btn:hover { border-color: var(--green); color: var(--green); }
+  .flow-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .flow-btn.primary { background: var(--green-dim); border-color: var(--green); color: var(--green); }
+  .flow-step-indicator { font-size: 0.68rem; color: var(--muted); }
+
+  .flow-body { display: grid; grid-template-columns: 1fr 1.4fr; min-height: 440px; }
+  .flow-viz { padding: 1.4rem; border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 0.5rem; }
+  .flow-info { padding: 1.4rem; }
+
+  .viz-block {
+    border: 1.5px solid;
+    border-radius: 7px;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.68rem;
+    transition: all 0.4s ease;
+    opacity: 0.35;
+    position: relative;
+  }
+  .viz-block.active-viz { opacity: 1; box-shadow: 0 0 12px rgba(0,0,0,0.5); }
+  .viz-block.dim-viz { opacity: 0.15; }
+  .viz-block .vb-name { font-weight: 700; font-size: 0.72rem; }
+  .viz-block .vb-path { font-size: 0.62rem; opacity: 0.7; margin-top: 0.15rem; }
+  .viz-block .vb-detail { font-size: 0.62rem; margin-top: 0.2rem; }
+
+  .viz-arrow { text-align: center; font-size: 0.8rem; color: var(--muted); line-height: 1; transition: all 0.4s; }
+  .viz-arrow.active-arrow { color: var(--green); }
+
+  .flow-phase-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+  }
+  .flow-phase-badge { margin-bottom: 0.8rem; }
+  .flow-phase-desc { font-size: 0.73rem; color: var(--muted); line-height: 1.75; margin-bottom: 1rem; }
+  .flow-detail-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+    font-size: 0.68rem;
+    line-height: 1.7;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  /* ── ACTORS ── */
+  .actor-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+  .actor-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.2rem;
+    font-size: 0.72rem;
+  }
+  .actor-icon { font-size: 1.8rem; margin-bottom: 0.6rem; }
+  .actor-name { font-weight: 700; font-size: 0.82rem; margin-bottom: 0.2rem; }
+  .actor-location { color: var(--muted); font-size: 0.65rem; margin-bottom: 0.7rem; }
+  .actor-role { color: var(--muted); line-height: 1.6; font-size: 0.7rem; }
+  .actor-role li { margin-bottom: 0.3rem; padding-left: 1em; position: relative; list-style: none; }
+  .actor-role li::before { content: '›'; position: absolute; left: 0; color: var(--green); }
+
+  /* ── TOOLTIP ── */
+  [data-tip] { position: relative; cursor: help; text-decoration: underline dotted var(--muted); }
+  [data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.8rem;
+    font-size: 0.65rem;
+    white-space: nowrap;
+    z-index: 999;
+    color: var(--text);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    pointer-events: none;
+  }
+
+  /* ── SIZE CALC VISUAL ── */
+  .size-bar-wrap { margin: 1rem 0; }
+  .size-bar-label { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.4rem; display: flex; justify-content: space-between; }
+  .size-bar { height: 24px; border-radius: 4px; background: var(--bg3); overflow: hidden; position: relative; }
+  .size-bar-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding: 0 0.6rem; font-size: 0.62rem; font-weight: 700; transition: width 1s ease; }
+
+  /* ── METADATA VIEWER ── */
+  .meta-tree { font-size: 0.72rem; line-height: 1.8; }
+  .meta-tree .folder { color: var(--yellow); }
+  .meta-tree .file   { color: var(--cyan); }
+  .meta-tree .value  { color: var(--green); }
+  .meta-tree .key    { color: var(--purple); }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg2); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── HIGHLIGHT BOX ── */
+  .highlight-box {
+    border-left: 3px solid;
+    padding: 0.8rem 1rem;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.73rem;
+    line-height: 1.6;
+    margin: 1rem 0;
+  }
+  .hb-green  { border-color: var(--green);  background: var(--green-dim); }
+  .hb-orange { border-color: var(--orange); background: var(--orange-dim); }
+  .hb-purple { border-color: var(--purple); background: var(--purple-dim); }
+  .hb-cyan   { border-color: var(--cyan);   background: var(--cyan-dim); }
+  .hb-red    { border-color: var(--red);    background: var(--red-dim); }
+  .hb-yellow { border-color: var(--yellow); background: var(--yellow-dim); }
+
+  @media (max-width: 900px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .flow-body { grid-template-columns: 1fr; }
+    .actor-grid { grid-template-columns: 1fr 1fr; }
+    .flow-viz { border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-top">
+    <span class="header-badge">AOSP Deep Dive</span>
+    <h1>Virtual <span>A/B</span> OTA Update</h1>
+    <span class="header-sub">Staff Engineer Reference · Qualcomm AAOS</span>
+  </div>
+  <div class="nav-tabs">
+    <button class="tab-btn active" onclick="showTab('overview')">① Overview</button>
+    <button class="tab-btn" onclick="showTab('payload')">② payload.bin</button>
+    <button class="tab-btn" onclick="showTab('cow')">③ COW Operations</button>
+    <button class="tab-btn" onclick="showTab('layers')">④ Block Device Layers</button>
+    <button class="tab-btn" onclick="showTab('snapshot')">⑤ Snapshot Device</button>
+    <button class="tab-btn" onclick="showTab('metadata')">⑥ Snapshot Metadata</button>
+    <button class="tab-btn" onclick="showTab('flow')">⑦ Full Flow</button>
+    <button class="tab-btn" onclick="showTab('actors')">⑧ Key Actors</button>
+    <button class="tab-btn" onclick="showTab('corrections')">⑨ Common Mistakes</button>
+    <button class="tab-btn" onclick="showTab('readblock')">⑩ read_block() Timing</button>
+    <button class="tab-btn" onclick="showTab('gpt')">⑪ GPT & Partitions</button>
+  </div>
+</div>
+
+<div class="content">
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 1: OVERVIEW                                    -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section active" id="sec-overview">
+  <div class="section-title">Virtual A/B — Why It Exists</div>
+  <div class="section-sub">Understanding the problem Classic A/B solved, and the new problem Virtual A/B solves.</div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--muted)"></span>Classic A/B (Android 7+)</div>
+      <div class="highlight-box hb-orange">
+        💡 Analogy: Keeping a <strong>full spare car</strong> in your garage just in case your main car breaks down. Works perfectly — but most people can't afford a 2-car garage.
+      </div>
+      <div style="margin-top:1rem">
+        <div class="size-bar-wrap">
+          <div class="size-bar-label"><span>Flash usage (system + vendor + boot × 2)</span><span style="color:var(--red)">~3–5 GB always wasted</span></div>
+          <div class="size-bar"><div class="size-bar-fill" style="width:100%;background:var(--red)">slot_a + slot_b permanently reserved</div></div>
+        </div>
+      </div>
+      <table style="margin-top:1rem">
+        <tr><th>Property</th><th>Value</th></tr>
+        <tr><td>Extra storage</td><td style="color:var(--red)">~3–5 GB permanent</td></tr>
+        <tr><td>OTA while running</td><td style="color:var(--green)">✓ Yes</td></tr>
+        <tr><td>Rollback</td><td style="color:var(--green)">✓ Instant slot switch</td></tr>
+        <tr><td>COW concept</td><td style="color:var(--muted)">Not used</td></tr>
+        <tr><td>Slot switch</td><td style="color:var(--green)">✓ Physical slot_b</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--green)"></span>Virtual A/B (Android 11+)</div>
+      <div class="highlight-box hb-green">
+        💡 Analogy: Instead of a spare car, keep only a <strong>repair kit</strong> — reconstruct what you need, on demand, using the existing car as a base. Storage needed = just the kit.
+      </div>
+      <div style="margin-top:1rem">
+        <div class="size-bar-wrap">
+          <div class="size-bar-label"><span>Extra flash during OTA (COW on /data)</span><span style="color:var(--orange)">~100–300 MB temporary</span></div>
+          <div class="size-bar"><div class="size-bar-fill" style="width:22%;background:var(--orange)">COW only</div></div>
+        </div>
+        <div class="size-bar-wrap">
+          <div class="size-bar-label"><span>Extra flash after merge</span><span style="color:var(--green)">0 bytes</span></div>
+          <div class="size-bar"><div class="size-bar-fill" style="width:2%;background:var(--green)">0</div></div>
+        </div>
+      </div>
+      <table style="margin-top:1rem">
+        <tr><th>Property</th><th>Value</th></tr>
+        <tr><td>Extra storage (permanent)</td><td style="color:var(--green)">✓ 0 bytes</td></tr>
+        <tr><td>Extra storage (during OTA)</td><td style="color:var(--orange)">⚠ COW on /data (temp)</td></tr>
+        <tr><td>OTA while running</td><td style="color:var(--green)">✓ Yes</td></tr>
+        <tr><td>Rollback</td><td style="color:var(--green)">✓ Yes (before merge)</td></tr>
+        <tr><td>Slot switch</td><td style="color:var(--green)">✓ Yes + merge afterward</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>The Core Insight — One Analogy to Rule Them All</div>
+    <div class="grid-2">
+      <div>
+        <div style="font-size:0.78rem;font-weight:700;margin-bottom:0.6rem;color:var(--cyan)">The Whiteboard + Overlay Model</div>
+        <div class="info-row"><span class="label">Whiteboard (full)</span><code style="color:var(--green)">system_a partition</code> — original data, always present</div>
+        <div class="info-row"><span class="label">Transparent overlay</span><code style="color:var(--orange)">COW file on /data</code> — only changes written here</div>
+        <div class="info-row"><span class="label">Combined view</span><code style="color:var(--purple)">dm-snapshot device</code> — virtual system_b seen by OS</div>
+        <div class="info-row"><span class="label">Read from whiteboard?</span>If overlay blank at that spot → read from system_a</div>
+        <div class="info-row"><span class="label">Read from overlay?</span>If overlay has new data → use COW data</div>
+      </div>
+      <div>
+        <div style="font-size:0.78rem;font-weight:700;margin-bottom:0.6rem;color:var(--yellow)">Git Diff Analogy</div>
+        <div class="highlight-box hb-yellow">
+          COW operations are like a <strong>git diff</strong> for partitions. Instead of storing the full new system (900 MB), you store just the patch (what changed). The full new system is reconstructed on-the-fly by applying the patch on top of the old system.
+        </div>
+        <div class="highlight-box hb-purple" style="margin-top:0.8rem">
+          <strong>Key:</strong> Virtual A/B never permanently duplicates partition data. slot_b is a temporary, virtual construct that exists only until the merge completes.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 2: payload.bin                                 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-payload">
+  <div class="section-title">payload.bin — Classic A/B vs Virtual A/B</div>
+  <div class="section-sub">payload.bin IS different for VAB. It contains new metadata that Classic A/B payload never had.</div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--blue)"></span>Who Generates payload.bin?</div>
+    <div class="code-block"><span class="cm"># Runs on Google/OEM build servers — NOT on device</span>
+<span class="ck">delta_generator</span> \
+  --new_image=<span class="cs">system_android14.img</span> \
+  --old_image=<span class="cs">system_android13.img</span> \
+  --out_file=<span class="cv">payload.bin</span> \
+  --cow_version=<span class="cn">2</span>          <span class="cm"># tells generator to include VAB metadata</span></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--muted)"></span>Classic A/B payload.bin Contents</div>
+      <div class="code-block"><span class="cm"># payload.bin structure (Classic A/B)</span>
+manifest:
+  partition: <span class="cs">system</span>
+  operations:
+    - type: <span class="cv">SOURCE_COPY</span>
+      <span class="cm"># copy blocks from old system_a to new system_b</span>
+    - type: <span class="cv">BSDIFF</span>
+      <span class="cm"># binary diff patch (old → new)</span>
+    - type: <span class="cv">PUFFDIFF</span>
+      <span class="cm"># puffin patch for zlib compressed content</span>
+    - type: <span class="cv">REPLACE_BZ</span>
+      <span class="cm"># brand new compressed blocks</span>
+    - type: <span class="cv">ZERO</span>
+      <span class="cm"># zero out blocks</span>
+
+<span class="cm"># NO estimate_cow_size field</span>
+<span class="cm"># NO cow_version field</span>
+<span class="cm"># update_engine writes directly to physical system_b</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--green)"></span>Virtual A/B payload.bin Contents</div>
+      <div class="code-block"><span class="cm"># payload.bin structure (Virtual A/B)</span>
+manifest:
+  partition: <span class="cs">system</span>
+  <span class="cn">cow_version: 2</span>              <span class="cm"># NEW! VAB flag</span>
+  <span class="cn">estimate_cow_size: 204800000</span> <span class="cm"># NEW! pre-calculated bytes</span>
+  operations:
+    - type: <span class="cv">SOURCE_COPY</span>
+      <span class="cm"># → translated to COW_COPY by update_engine</span>
+    - type: <span class="cv">REPLACE</span>
+      <span class="cm"># → translated to COW_REPLACE</span>
+    - type: <span class="cv">ZERO</span>
+      <span class="cm"># → translated to COW_ZERO</span>
+    - type: <span class="cv">SOURCE_BSDIFF</span>
+      <span class="cm"># → decomposed into COW_COPY + COW_REPLACE</span>
+
+<span class="cm"># estimate_cow_size is CRITICAL:</span>
+<span class="cm"># SnapshotManager uses it to pre-allocate COW file on /data</span>
+<span class="cm"># Without this → SnapshotManager can't reserve space!</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--orange)"></span>estimate_cow_size — How It's Calculated</div>
+    <div class="highlight-box hb-orange">
+      💡 Analogy: payload.bin for VAB is like a <strong>renovation blueprint that includes a materials estimate</strong> — it describes what to change AND tells the contractor (SnapshotManager) exactly how much storage to reserve before work begins.
+    </div>
+    <div class="code-block" style="margin-top:1rem"><span class="cm"># delta_generator computes estimate_cow_size like this:</span>
+
+estimate_cow_size =
+    (num_REPLACE_ops  × block_size_4KB)   <span class="cm"># raw block data storage</span>
+  + (num_COPY_ops     × sizeof(CowCopyOp)) <span class="cm"># tiny struct ~16 bytes each</span>
+  + (num_ZERO_ops     × sizeof(CowZeroOp)) <span class="cm"># tiny struct ~8 bytes each</span>
+  + COW_header_size                        <span class="cm"># fixed overhead</span>
+  + 10% safety_buffer                      <span class="cm"># alignment + rounding margin</span>
+
+<span class="cm"># Example for Android 13→14 update of 900MB system partition:</span>
+<span class="cm">#   50,000 REPLACE ops = 50,000 × 4KB  = 200 MB</span>
+<span class="cm">#   10,000 COPY ops    = 10,000 × 16B  = 160 KB</span>
+<span class="cm">#    5,000 ZERO ops    = 5,000  × 8B   =  40 KB</span>
+<span class="cm">#   Safety buffer (10%)                =  20 MB</span>
+<span class="cm">#   estimate_cow_size                  ≈ 220 MB</span>
+<span class="cm">#   (vs 900MB for full copy in Classic A/B!)</span></div>
+    <div class="highlight-box hb-purple" style="margin-top:1rem">
+      <strong>Key difference:</strong> update_engine does NOT write directly to a physical partition in VAB. It writes to a virtual dm-snapshot device, which internally routes writes to the COW file. update_engine doesn't know or care about the COW file — SnapshotManager abstracts that away.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 3: COW OPERATIONS                              -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-cow">
+  <div class="section-title">COW Operations — The Building Blocks</div>
+  <div class="section-sub">Copy-on-Write (COW) operations are the "git diff" language of Virtual A/B. Only changes are stored — not the full partition.</div>
+
+  <div class="highlight-box hb-cyan" style="margin-bottom:1.5rem">
+    💡 <strong>COW Strategy:</strong> "Don't copy the entire data upfront. Only record WHAT CHANGED. Reconstruct the full picture on demand by combining old partition + COW operations."
+  </div>
+
+  <div class="cow-op">
+    <div class="cow-op-header">
+      <span class="badge badge-orange">COW_REPLACE</span>
+      <span class="cow-op-name">Full Block Replacement</span>
+    </div>
+    <div class="cow-op-desc">Block has completely new data that cannot be derived from existing blocks. The full 4KB of new content is stored in the COW file. Used when block content changed significantly (e.g., updated binary, changed framework code).</div>
+    <div class="info-row" style="margin-top:0.6rem"><span class="label">Stores</span>Full 4KB new block content</div>
+    <div class="info-row"><span class="label">Storage cost</span>4KB per operation (most expensive)</div>
+    <div class="info-row"><span class="label">Use case</span>Framework JAR updated, native library changed</div>
+    <div class="cow-op-example">Old block[1]: [framework.jar v13.0 bytes...]
+New block[1]: [framework.jar v14.0 bytes...]
+COW stores → COW_REPLACE { dest_block: 1, data: [new 4KB] }
+
+At read time: block[1] → return new 4KB from COW file ✓</div>
+  </div>
+
+  <div class="cow-op">
+    <div class="cow-op-header">
+      <span class="badge badge-cyan">COW_COPY</span>
+      <span class="cow-op-name">Block Relocation / Move</span>
+    </div>
+    <div class="cow-op-desc">New block content is identical to an existing block at a different location in system_a. Instead of storing the data again, just store (source_block, dest_block) — a tiny 16-byte struct. Used when files/data are rearranged/moved in the new partition layout.</div>
+    <div class="info-row" style="margin-top:0.6rem"><span class="label">Stores</span>Just source_block + dest_block (~16 bytes)</div>
+    <div class="info-row"><span class="label">Storage cost</span>~16 bytes (extremely cheap!)</div>
+    <div class="info-row"><span class="label">Use case</span>File moved to different location in partition</div>
+    <div class="cow-op-example">block[5] in new system = block[2] in old system_a (file relocated)
+COW stores → COW_COPY { src_block: 2, dest_block: 5 }
+
+At read time: block[5] → read block[2] from system_a origin ✓</div>
+  </div>
+
+  <div class="cow-op">
+    <div class="cow-op-header">
+      <span class="badge badge-blue">COW_ZERO</span>
+      <span class="cow-op-name">Block Zeroing</span>
+    </div>
+    <div class="cow-op-desc">Block should become all zeros in the new system. No data needs to be stored — just record which block gets zeroed. Used when a file is deleted or a region is cleared in the new partition.</div>
+    <div class="info-row" style="margin-top:0.6rem"><span class="label">Stores</span>Just dest_block (~8 bytes)</div>
+    <div class="info-row"><span class="label">Storage cost</span>~8 bytes (almost free!)</div>
+    <div class="info-row"><span class="label">Use case</span>File deleted, region wiped in new partition</div>
+    <div class="cow-op-example">block[7] should be zeros in new system
+COW stores → COW_ZERO { dest_block: 7 }
+
+At read time: block[7] → return all zeros ✓</div>
+  </div>
+
+  <div class="cow-op">
+    <div class="cow-op-header">
+      <span class="badge badge-yellow">COW_LABEL</span>
+      <span class="cow-op-name">Checkpoint / Resume Marker</span>
+    </div>
+    <div class="cow-op-desc">Not a data operation — a sequence number marker written periodically into the COW file. If the device loses power during OTA, update_engine reads the last COW_LABEL to find where to resume. Critical for OTA resumability (especially important in AAOS where car might be turned off mid-update).</div>
+    <div class="info-row" style="margin-top:0.6rem"><span class="label">Stores</span>Sequence number (checkpoint ID)</div>
+    <div class="info-row"><span class="label">Storage cost</span>~8 bytes</div>
+    <div class="info-row"><span class="label">Use case</span>Power loss recovery — resume OTA from last checkpoint</div>
+    <div class="cow-op-example">update_engine writes every N blocks:
+COW stores → COW_LABEL { sequence: 4271 }
+
+On resume after power loss:
+  read COW_LABEL → sequence: 4271
+  → resume from operation 4271, skip 0..4270 ✓</div>
+  </div>
+
+  <div class="card" style="margin-top:1.5rem">
+    <div class="card-title"><span class="dot" style="background:var(--green)"></span>Concrete Example — system_a → system_b delta</div>
+    <div class="code-block"><span class="cm"># system_a has 225,000 blocks (900MB partition, 4KB each)</span>
+
+<span class="cm"># Old system_a blocks:</span>
+block[0]: [Android 13 init code    ]   <span class="cm">← unchanged</span>
+block[1]: [framework.jar v13.0     ]   <span class="cm">← CHANGED</span>
+block[2]: [libutils.so v13.0       ]   <span class="cm">← MOVED to block[5]</span>
+block[3]: [build.prop version=13   ]   <span class="cm">← CHANGED</span>
+block[4]: [unchanged driver code   ]   <span class="cm">← unchanged</span>
+block[5]: [old file data           ]   <span class="cm">← ZEROED (file deleted)</span>
+...
+block[175000]: [unchanged media codec] <span class="cm">← unchanged</span>
+
+<span class="cm"># Resulting COW file for system_a:</span>
+COW_REPLACE { block:1, data:[new framework.jar bytes] }  <span class="cm">→ 4KB</span>
+COW_REPLACE { block:3, data:[version=14\n...]         }  <span class="cm">→ 4KB</span>
+COW_COPY    { src:2, dst:5                            }  <span class="cm">→ 16B</span>
+COW_ZERO    { block:2                                 }  <span class="cm">→  8B</span>
+<span class="cm"># blocks 0, 4, 175000, etc. have NO COW entry → read from system_a</span>
+
+<span class="cm"># COW file total: ~8KB + headers</span>
+<span class="cm"># vs full system_b copy: 900MB</span>
+<span class="cm"># Savings: >99.9% in this example!</span></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 4: BLOCK DEVICE LAYERS                         -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-layers">
+  <div class="section-title">Block Device Layer Stack</div>
+  <div class="section-sub">Virtual A/B adds two new layers on top of the existing dm-linear → dm-verity chain. Each layer has exactly one job.</div>
+
+  <div class="grid-2">
+    <div>
+      <div style="font-size:0.78rem;font-weight:700;margin-bottom:1rem;color:var(--muted)">Classic A/B Layer Stack</div>
+      <div class="layer-stack">
+        <div class="layer" style="border-color:var(--blue);color:var(--blue);background:var(--blue-dim)">
+          <div class="layer-name">Filesystem (ext4/erofs)</div>
+          <div class="layer-desc">Mounts the verified block device</div>
+        </div>
+        <div class="layer-arrow">↑ mount</div>
+        <div class="layer" style="border-color:var(--purple);color:var(--purple);background:var(--purple-dim)">
+          <div class="layer-name">dm-verity</div>
+          <div class="layer-path">/dev/block/dm-0</div>
+          <div class="layer-desc">Verifies every block read using Merkle hash tree</div>
+        </div>
+        <div class="layer-arrow">↑ wraps</div>
+        <div class="layer" style="border-color:var(--cyan);color:var(--cyan);background:var(--cyan-dim)">
+          <div class="layer-name">dm-linear</div>
+          <div class="layer-path">/dev/block/mapper/system_a</div>
+          <div class="layer-desc">Carves logical system_a from physical /super</div>
+        </div>
+        <div class="layer-arrow">↑ carves from</div>
+        <div class="layer" style="border-color:var(--muted);color:var(--muted)">
+          <div class="layer-name">Physical Flash</div>
+          <div class="layer-path">/dev/block/by-name/super</div>
+          <div class="layer-desc">Real hardware — one big block device</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div style="font-size:0.78rem;font-weight:700;margin-bottom:1rem;color:var(--green)">Virtual A/B Layer Stack (During OTA)</div>
+      <div class="layer-stack">
+        <div class="layer" style="border-color:var(--blue);color:var(--blue);background:var(--blue-dim)">
+          <div class="layer-name">Filesystem (ext4/erofs)</div>
+          <div class="layer-desc">Mounts the verified snapshot — sees "new system"</div>
+        </div>
+        <div class="layer-arrow">↑ mount</div>
+        <div class="layer" style="border-color:var(--purple);color:var(--purple);background:var(--purple-dim)">
+          <div class="layer-name">dm-verity</div>
+          <div class="layer-path">/dev/block/dm-X</div>
+          <div class="layer-desc">Verifies every block of virtual system_b</div>
+        </div>
+        <div class="layer-arrow">↑ wraps</div>
+        <div class="layer" style="border-color:var(--green);color:var(--green);background:var(--green-dim)">
+          <div class="layer-name">dm-snapshot ← NEW!</div>
+          <div class="layer-path">/dev/block/mapper/system_b-snapshot</div>
+          <div class="layer-desc">Combines origin (system_a) + COW → virtual system_b</div>
+        </div>
+        <div class="layer-arrow">↑ combines</div>
+        <div class="layer" style="border-color:var(--orange);color:var(--orange);background:var(--orange-dim)">
+          <div class="layer-name">COW Loop Device ← NEW!</div>
+          <div class="layer-path">/dev/block/mapper/system_a-cow-img</div>
+          <div class="layer-desc">COW file exposed as block device (loop/dm-bow)</div>
+        </div>
+        <div class="layer-arrow" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;text-align:center">
+          <div>↑ origin</div><div>↑ cow</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+          <div class="layer" style="border-color:var(--cyan);color:var(--cyan);background:var(--cyan-dim);border-radius:8px">
+            <div class="layer-name">dm-linear</div>
+            <div class="layer-path">/dev/block/mapper/system_a</div>
+            <div class="layer-desc">Origin: real system_a data</div>
+          </div>
+          <div class="layer" style="border-color:var(--yellow);color:var(--yellow);background:var(--yellow-dim);border-radius:8px">
+            <div class="layer-name">COW File</div>
+            <div class="layer-path">/data/gsi/ota/system_cow</div>
+            <div class="layer-desc">Regular file → loop device adapter</div>
+          </div>
+        </div>
+        <div class="layer-arrow">↑ both from</div>
+        <div class="layer" style="border-color:var(--muted);color:var(--muted)">
+          <div class="layer-name">Physical Flash + /data partition</div>
+          <div class="layer-path">/dev/block/by-name/super + /dev/block/by-name/userdata</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1.5rem">
+    <div class="card-title"><span class="dot" style="background:var(--orange)"></span>Why COW File Needs a Loop Device Adapter</div>
+    <div class="highlight-box hb-orange">
+      <strong>Problem:</strong> dm-snapshot is a kernel Device Mapper target — it can only connect to <em>block devices</em>. But the COW file lives on the /data filesystem — it's a regular <em>file</em>. The kernel cannot use a filesystem file as a block device directly.
+    </div>
+    <div class="code-block" style="margin-top:1rem"><span class="cm"># The adapter chain:</span>
+
+/data/gsi/ota/system_cow  (regular filesystem file, pre-allocated 200MB)
+            ↓
+    [IImageManager / loop device]    <span class="cm">← SnapshotManager sets this up</span>
+    <span class="cm"># Uses dm-bow (Block Device Wrapper) or loop device</span>
+    <span class="cm"># to present the file AS a block device</span>
+            ↓
+/dev/block/mapper/system_a-cow-img   <span class="cm">← NOW it's a block device!</span>
+            ↓
+    [dm-snapshot can use it] ✓
+
+<span class="cm"># Analogy: dm-snapshot is a plumber who only connects PIPES (block devices).</span>
+<span class="cm"># The COW file is water in a TANK (filesystem file).</span>
+<span class="cm"># The loop device is the ADAPTER converting tank → pipe fitting.</span></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--purple)"></span>How dm-snapshot Serves Read Requests</div>
+    <div class="code-block"><span class="cm"># dm-snapshot block read logic (pseudocode):</span>
+
+function read_block(block_number):
+    <span class="cv">if</span> COW_file.has_entry(block_number):
+        <span class="cv">if</span> entry.type == COW_REPLACE:
+            <span class="cs">return</span> entry.data                      <span class="cm"># new data from COW</span>
+        <span class="cv">elif</span> entry.type == COW_COPY:
+            <span class="cs">return</span> system_a.read(entry.src_block)   <span class="cm"># redirect to source</span>
+        <span class="cv">elif</span> entry.type == COW_ZERO:
+            <span class="cs">return</span> zeros(4096)                      <span class="cm"># return zeros</span>
+    <span class="cv">else</span>:
+        <span class="cs">return</span> system_a.read(block_number)          <span class="cm"># unchanged → read origin</span>
+
+<span class="cm"># This lookup is O(log n) using an in-memory hash table of COW entries</span>
+<span class="cm"># After first access, Linux page cache serves repeated reads from RAM</span></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 5: SNAPSHOT DEVICE                             -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-snapshot">
+  <div class="section-title">Snapshot Device — Creation & Lifecycle</div>
+  <div class="section-sub">Who creates /dev/block/mapper/system_b-snapshot, when, and how. SnapshotManager is the orchestrator.</div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--green)"></span>SnapshotManager — The Architect</div>
+    <div class="info-row"><span class="label">Library</span><code>libsnapshot</code></div>
+    <div class="info-row"><span class="label">Location in tree</span><code>system/core/fs_mgr/libsnapshot/</code></div>
+    <div class="info-row"><span class="label">Key class</span><code>SnapshotManager</code></div>
+    <div class="info-row"><span class="label">Called by</span>update_engine (OTA time), first_stage_init (boot time)</div>
+    <div class="info-row"><span class="label">Role</span>Creates COW files, loop devices, dm-snapshot targets — abstracts all complexity from update_engine</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--orange)"></span>Step-by-Step Snapshot Device Creation</div>
+    <div class="code-block"><span class="cm">═══ STEP 1: update_engine calls SnapshotManager ═══</span>
+update_engine → SnapshotManager::<span class="cv">CreateUpdateSnapshots</span>(manifest)
+  <span class="cm"># passes: estimate_cow_size per partition from payload.bin</span>
+
+<span class="cm">═══ STEP 2: SnapshotManager creates COW file on /data ═══</span>
+fd = open(<span class="cs">"/data/gsi/ota/system_cow"</span>, O_CREAT | O_RDWR)
+<span class="cv">fallocate</span>(fd, 0, 0, <span class="cn">204800000</span>)   <span class="cm"># pre-allocates 200MB — no actual data written</span>
+<span class="cm"># fallocate is critical: reserves space so OTA can't fail mid-write</span>
+
+<span class="cm">═══ STEP 3: Expose COW file as block device ═══</span>
+IImageManager::<span class="cv">MapImageDevice</span>(<span class="cs">"system_a-cow-img"</span>)
+<span class="cm"># Internally uses dm-bow or loop to create:</span>
+<span class="cm"># /dev/block/mapper/system_a-cow-img  ← block device!</span>
+
+<span class="cm">═══ STEP 4: Write dm-snapshot table to kernel ═══</span>
+dmsetup create <span class="cs">system_b-snapshot</span> --table \
+  <span class="cn">"0 1843200 snapshot \         </span><span class="cm"># 0=start, 1843200=sectors(900MB)</span>
+   /dev/block/mapper/system_a \  <span class="cm"># origin device</span>
+   /dev/block/mapper/system_a-cow-img \ <span class="cm"># COW block device</span>
+   <span class="cn">P \                           </span><span class="cm"># Persistent (survives reads)</span>
+   <span class="cn">8"                            </span><span class="cm"># chunk size = 8 sectors = 4KB</span>
+
+<span class="cm">═══ STEP 5: Kernel creates virtual device ═══</span>
+<span class="cs">/dev/block/mapper/system_b-snapshot</span>  ← NOW EXISTS ✓
+<span class="cm"># This virtual device has NO physical space of its own</span>
+<span class="cm"># It's just a Device Mapper mapping table in kernel memory</span>
+
+<span class="cm">═══ STEP 6: Return path to update_engine ═══</span>
+SnapshotManager returns: <span class="cs">"/dev/block/mapper/system_b-snapshot"</span>
+update_engine opens it and writes COW operations through it</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>Space Accounting — What Takes Real Flash Space?</div>
+    <table>
+      <tr>
+        <th>Component</th>
+        <th>RAM</th>
+        <th>Flash (/super)</th>
+        <th>Flash (/data)</th>
+        <th>Notes</th>
+      </tr>
+      <tr>
+        <td><code>/dev/block/mapper/system_b-snapshot</code></td>
+        <td style="color:var(--orange)">~few KB</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td>Pure virtual — just a DM mapping table</td>
+      </tr>
+      <tr>
+        <td>COW file <code>/data/gsi/ota/system_cow</code></td>
+        <td style="color:var(--green)">0</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td style="color:var(--orange)">~200MB ⚠</td>
+        <td>Only real space consumed. Temporary — deleted after merge</td>
+      </tr>
+      <tr>
+        <td>dm-snapshot kernel structures</td>
+        <td style="color:var(--orange)">~few KB</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td>Kernel data structures only</td>
+      </tr>
+      <tr>
+        <td>Loop device for COW</td>
+        <td style="color:var(--orange)">~few KB</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td>Kernel data structure — no flash</td>
+      </tr>
+      <tr>
+        <td>system_a (origin)</td>
+        <td style="color:var(--muted)">cached</td>
+        <td style="color:var(--muted)">900MB (existing)</td>
+        <td style="color:var(--green)">0 ✓</td>
+        <td>Unchanged during OTA — read-only origin</td>
+      </tr>
+    </table>
+    <div class="highlight-box hb-green" style="margin-top:1rem">
+      <strong>Bottom line:</strong> The virtual snapshot device itself costs ZERO flash space. Only the COW file on /data costs real storage — and it's temporary, deleted after successful merge.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 6: SNAPSHOT METADATA                           -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-metadata">
+  <div class="section-title">Snapshot Metadata — /metadata Partition</div>
+  <div class="section-sub">Why /metadata exists, what it stores, the boot sequence timing, and the state machine that drives the entire VAB lifecycle.</div>
+
+  <!-- AMNESIA ANALOGY -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-title"><span class="dot" style="background:var(--yellow)"></span>The Amnesia Problem — Why /metadata Must Exist</div>
+    <div class="highlight-box hb-yellow" style="margin-bottom:1rem">
+      🧠 <strong>Analogy:</strong> Imagine you fall asleep (device reboots). When you wake up (boot), you have <strong>complete amnesia</strong>. You remember NOTHING about what happened before sleep.<br><br>
+      Questions you need answered the <em>moment</em> you wake up — before you even get out of bed:<br>
+      ❓ "Was I in the middle of updating my house?"<br>
+      ❓ "Which rooms were being renovated?"<br>
+      ❓ "Where are the renovation blueprints stored?"<br>
+      ❓ "Is it safe to enter the house normally?"<br><br>
+      You need a <strong>NOTE left on your bedside table</strong> that you can read THE MOMENT you wake up — before accessing any other room.<br><br>
+      <strong>/metadata IS that bedside table note. 📝</strong>
+    </div>
+    <div class="highlight-box hb-red">
+      ⚠️ <strong>The Core Conflict:</strong> COW files live on <code>/data</code>. But <code>/data</code> is FBE encrypted — it cannot be read until the user unlocks OR CE keys are available. But <code>/system</code> needs to be mounted BEFORE that. So init needs "reconstruct snapshot" instructions BEFORE it can even access <code>/data</code>. That's exactly what <code>/metadata</code> solves.
+    </div>
+  </div>
+
+  <!-- BOOT SEQUENCE TIMING -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>Boot Sequence — What's Available WHEN</div>
+    <div class="code-block"><span class="cm">T=0ms   </span>  Kernel starts, ueventd creates /dev/block/* symlinks
+
+<span class="cm">T=50ms  </span>  <span class="cs">/metadata mounted</span>  ← <span class="cn">FIRST partition mounted! Always. No encryption.</span>
+          first_stage_init reads:
+            /metadata/ota/snapshot_boot = <span class="cv">"1"</span>  ← Am I in snapshot mode?
+
+          <span class="cm">← /system NOT MOUNTED YET</span>
+          <span class="cm">← /data  NOT MOUNTED YET  (FBE encrypted!)</span>
+          <span class="cm">← /vendor NOT MOUNTED YET</span>
+
+<span class="cm">T=100ms </span>  first_stage_init acts on /metadata:
+          IF snapshot_boot = 1:
+            reads /metadata/ota/snapshots/* for each partition
+            calls SnapshotManager → rebuilds dm-snapshot devices
+            sets up dm-verity on top of dm-snapshot
+            <span class="cs">mounts /dev/block/dm-X → /system</span>  ← virtual system_b!
+          ELSE:
+            mounts /system normally (no snapshot logic)
+
+<span class="cm">T=200ms </span>  second_stage_init starts (from /system/bin/init)
+          starts services, Zygote, etc.
+
+<span class="cm">T=500ms </span>  <span class="cs">/data mounted and decrypted</span>  ← COW files NOW accessible
+          (BUT TOO LATE — /system was already mounted at T=100ms!)
+
+<span class="cm"># This is WHY /metadata must hold snapshot config —</span>
+<span class="cm"># /data becomes available 400ms+ after /system is already mounted!</span></div>
+    <div class="highlight-box hb-green" style="margin-top:1rem">
+      <strong>Key insight:</strong> If snapshot_boot=0 in /metadata → init skips ALL snapshot logic entirely. Zero performance cost on normal boots. The flag is only set to 1 during an active OTA, and cleared back to 0 after merge completes.
+    </div>
+  </div>
+
+  <!-- WHAT METADATA TELLS INIT -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-title"><span class="dot" style="background:var(--orange)"></span>Concrete — What /metadata Tells first_stage_init Step by Step</div>
+    <div class="code-block"><span class="cm">SCENARIO: Device reboots after OTA applied. first_stage_init starts.</span>
+<span class="cm">          Has NO memory of anything. Reading /metadata for first time.</span>
+
+<span class="cv">Step 1:</span> init mounts /metadata (always first, always unencrypted)
+
+<span class="cv">Step 2:</span> reads /metadata/ota/<span class="cs">snapshot_boot</span> = <span class="cn">"1"</span>
+         → YES, I am in snapshot mode! Don't boot normally.
+
+         If value were "0" → skip all snapshot logic, boot normally.
+
+<span class="cv">Step 3:</span> reads /metadata/ota/snapshots/<span class="cs">system_a</span>:
+           cow_file_size:  <span class="cn">204800000</span>   ← "COW file is 200MB on /data"
+           snapshot_size:  <span class="cn">943718400</span>   ← "virtual device should be 900MB"
+           status:         <span class="cn">UNVERIFIED</span>  ← "not yet verified boot"
+         reads /metadata/ota/snapshots/<span class="cs">vendor_a</span>:
+           cow_file_size:  <span class="cn">52428800</span>    ← "vendor COW is 50MB"
+
+<span class="cv">Step 4:</span> SnapshotManager reconstructs dm-snapshot:
+           origin = /dev/block/mapper/system_a   (real data)
+           cow    = /data/gsi/ota/system_cow     (200MB COW)
+           size   = 900MB
+         → creates /dev/block/mapper/system_b-snapshot ✓
+
+<span class="cv">Step 5:</span> dm-verity set up on system_b-snapshot → /dev/block/dm-X
+
+<span class="cv">Step 6:</span> mount /dev/block/dm-X → /system ✓
+         Device now running from virtual slot_b (system_a + COW)</div>
+  </div>
+
+  <!-- /metadata AS LOGBOOK -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <div class="card-title"><span class="dot" style="background:var(--purple)"></span>/metadata as the OTA Logbook — Updated Throughout the Process</div>
+    <div class="highlight-box hb-purple" style="margin-bottom:1rem">
+      /metadata is NOT written once — update_engine and SnapshotManager keep updating it as the OTA progresses, so after any reboot (power loss, user reboot, etc.) the device knows EXACTLY where in the process it was.
+    </div>
+    <div class="code-block">update_engine starts OTA:
+  /metadata/ota/update_state = <span class="cs">"INITIATED"</span>
+  /metadata/ota/snapshot_boot = <span class="cn">"0"</span>  (not ready yet)
+
+OTA writing to COW file complete:
+  /metadata/ota/update_state = <span class="cs">"UNVERIFIED"</span>
+  /metadata/ota/snapshot_boot = <span class="cn">"1"</span>  ← NOW set! Next boot will use snapshot.
+
+First successful boot into virtual slot_b:
+  /metadata/ota/update_state = <span class="cs">"VERIFIED"</span>
+
+Merge starts (background):
+  /metadata/ota/update_state = <span class="cs">"MERGING"</span>
+
+Merge complete, COW files deleted:
+  /metadata/ota/update_state = <span class="cs">"MERGE_COMPLETED"</span>
+  /metadata/ota/snapshot_boot = <span class="cn">"0"</span>  ← cleared! Next boot is normal.
+  → Next boot: init reads snapshot_boot=0 → skips snapshot entirely ✓</div>
+  </div>
+
+  <div class="highlight-box hb-cyan" style="margin-bottom:1.5rem">
+    💡 <strong>One-line summary:</strong> /metadata is the ONLY partition that is small, unencrypted, and mounted before everything else — making it the ONLY safe place to store "what OTA state are we in?" so first_stage_init can reconstruct virtual partitions before mounting /system, even though COW files are locked behind /data encryption.
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--yellow)"></span>/metadata Partition Properties</div>
+      <div class="info-row"><span class="label">Mount point</span><code>/metadata</code></div>
+      <div class="info-row"><span class="label">Filesystem</span>ext4 (no encryption)</div>
+      <div class="info-row"><span class="label">Typical size</span>~16 MB</div>
+      <div class="info-row"><span class="label">Encrypted?</span><span style="color:var(--green)">No — always readable</span></div>
+      <div class="info-row"><span class="label">Mounted when</span>First stage init (before /data, before /system)</div>
+      <div class="info-row"><span class="label">Also stores</span>FBE encryption metadata, OTA checkpoint flags</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--orange)"></span>Snapshot Metadata File Tree</div>
+      <div class="meta-tree">
+        <div><span class="folder">/metadata/ota/</span></div>
+        <div style="padding-left:1.2rem"><span class="file">snapshot_boot</span>  <span class="value"># flag: booting from snapshot? yes/no</span></div>
+        <div style="padding-left:1.2rem"><span class="file">update_state</span>   <span class="value"># current state machine state</span></div>
+        <div style="padding-left:1.2rem"><span class="folder">snapshots/</span></div>
+        <div style="padding-left:2.4rem"><span class="folder">system_a/</span></div>
+        <div style="padding-left:3.6rem"><span class="key">cow_file_size:</span>  <span class="value">204800000</span></div>
+        <div style="padding-left:3.6rem"><span class="key">cow_partition_size:</span> <span class="value">0</span></div>
+        <div style="padding-left:3.6rem"><span class="key">snapshot_size:</span> <span class="value">943718400</span></div>
+        <div style="padding-left:3.6rem"><span class="key">device_size:</span>   <span class="value">943718400</span></div>
+        <div style="padding-left:3.6rem"><span class="key">status:</span>        <span class="value">UNVERIFIED</span></div>
+        <div style="padding-left:2.4rem"><span class="folder">vendor_a/</span></div>
+        <div style="padding-left:3.6rem"><span class="key">cow_file_size:</span> <span class="value">52428800</span></div>
+        <div style="padding-left:3.6rem"><span class="key">status:</span>        <span class="value">UNVERIFIED</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--purple)"></span>State Machine — The Lifecycle of a VAB Update</div>
+    <div class="state-flow" id="state-flow">
+      <div class="state-node" onclick="selectState(0)" id="state-0">
+        NONE
+        <div class="state-label">Normal operation<br>No update in progress</div>
+      </div>
+      <div class="state-arrow">→</div>
+      <div class="state-node" onclick="selectState(1)" id="state-1">
+        INITIATED
+        <div class="state-label">CreateUpdateSnapshots()<br>called. COW files created.</div>
+      </div>
+      <div class="state-arrow">→</div>
+      <div class="state-node" onclick="selectState(2)" id="state-2">
+        UNVERIFIED
+        <div class="state-label">OTA written to COW.<br>Not yet booted into it.</div>
+      </div>
+      <div class="state-arrow">→</div>
+      <div class="state-node" onclick="selectState(3)" id="state-3">
+        VERIFIED
+        <div class="state-label">Booted into snapshot<br>successfully. Ready to merge.</div>
+      </div>
+      <div class="state-arrow">→</div>
+      <div class="state-node" onclick="selectState(4)" id="state-4">
+        MERGING
+        <div class="state-label">COW ops being written<br>into system_a. Background.</div>
+      </div>
+      <div class="state-arrow">→</div>
+      <div class="state-node" onclick="selectState(5)" id="state-5">
+        MERGE_COMPLETED
+        <div class="state-label">All COW ops merged.<br>COW files deleted.</div>
+      </div>
+      <div class="state-arrow">→</div>
+      <div class="state-node" onclick="selectState(0)" id="state-6">
+        NONE
+        <div class="state-label">Back to normal.<br>Next update ready.</div>
+      </div>
+    </div>
+
+    <div id="state-detail" style="margin-top:1rem;font-size:0.73rem;color:var(--muted);padding:0.8rem;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
+      Click any state above to see details.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 7: FULL FLOW                                   -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-flow">
+  <div class="section-title">Full VAB Update Flow — Interactive Timeline</div>
+  <div class="section-sub">Step through the complete lifecycle from payload.bin generation to post-merge. Use ← → buttons to navigate.</div>
+
+  <div class="flow-container">
+    <div class="flow-header">
+      <span class="flow-title">VAB Update Timeline</span>
+      <div class="flow-controls">
+        <button class="flow-btn" id="fprev" onclick="flowPrev()">← Prev</button>
+        <span class="flow-step-indicator" id="fstep">Step 1 / 9</span>
+        <button class="flow-btn primary" id="fnext" onclick="flowNext()">Next →</button>
+        <button class="flow-btn" onclick="flowReset()">↺ Reset</button>
+      </div>
+    </div>
+    <div class="flow-body">
+      <div class="flow-viz" id="flow-viz">
+        <!-- Populated by JS -->
+      </div>
+      <div class="flow-info" id="flow-info">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 8: KEY ACTORS                                  -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-actors">
+  <div class="section-title">Key Actors & Their Roles</div>
+  <div class="section-sub">Every component involved in Virtual A/B and exactly what each one does.</div>
+
+  <div class="actor-grid">
+    <div class="actor-card" style="border-color:var(--blue)">
+      <div class="actor-icon">⚙️</div>
+      <div class="actor-name" style="color:var(--blue)">update_engine</div>
+      <div class="actor-location">system/update_engine/</div>
+      <ul class="actor-role">
+        <li>Downloads and parses payload.bin</li>
+        <li>Calls SnapshotManager::CreateUpdateSnapshots()</li>
+        <li>Writes COW operations to virtual snapshot device</li>
+        <li>Calls SnapshotManager::FinishedSnapshotWrites()</li>
+        <li>Instructs bootloader to switch slot to _b</li>
+        <li>Initiates merge after successful boot</li>
+        <li>In Classic A/B: wrote to physical partition directly</li>
+        <li>In VAB: writes to virtual dm-snapshot device</li>
+      </ul>
+    </div>
+
+    <div class="actor-card" style="border-color:var(--green)">
+      <div class="actor-icon">🏗️</div>
+      <div class="actor-name" style="color:var(--green)">SnapshotManager (libsnapshot)</div>
+      <div class="actor-location">system/core/fs_mgr/libsnapshot/</div>
+      <ul class="actor-role">
+        <li>Creates COW files on /data (fallocate)</li>
+        <li>Exposes COW file as block device via IImageManager</li>
+        <li>Creates dm-snapshot kernel targets</li>
+        <li>Returns /dev/block/mapper/system_b-snapshot path</li>
+        <li>Writes/reads snapshot metadata to /metadata</li>
+        <li>Manages state machine (NONE→INITIATED→...→COMPLETED)</li>
+        <li>Executes merge in background after verified boot</li>
+        <li>Deletes COW files after successful merge</li>
+      </ul>
+    </div>
+
+    <div class="actor-card" style="border-color:var(--orange)">
+      <div class="actor-icon">🔧</div>
+      <div class="actor-name" style="color:var(--orange)">dm-snapshot (kernel)</div>
+      <div class="actor-location">drivers/md/dm-snapshot.c</div>
+      <ul class="actor-role">
+        <li>Device Mapper target — Linux kernel driver</li>
+        <li>Combines origin (system_a) + COW device</li>
+        <li>On read: checks COW first, falls back to origin</li>
+        <li>On write: routes to COW device, not origin</li>
+        <li>Presents unified virtual block device</li>
+        <li>Chunk size: 4KB (aligns with filesystem block size)</li>
+        <li>Mode: Persistent (survives across reads)</li>
+      </ul>
+    </div>
+
+    <div class="actor-card" style="border-color:var(--purple)">
+      <div class="actor-icon">🗄️</div>
+      <div class="actor-name" style="color:var(--purple)">snapuserd (userspace)</div>
+      <div class="actor-location">system/core/fs_mgr/libsnapshot/snapuserd/</div>
+      <ul class="actor-role">
+        <li>Userspace daemon that serves COW reads</li>
+        <li>Started VERY early — before /data is decrypted</li>
+        <li>Handles decompression of COW data (for VABC)</li>
+        <li>Communicates with kernel via dm-user target</li>
+        <li>Stays alive until merge is complete</li>
+        <li>Critical for AAOS: must start before /data FBE unlock</li>
+        <li>In basic VAB: dm-snapshot handles this in kernel</li>
+      </ul>
+    </div>
+
+    <div class="actor-card" style="border-color:var(--yellow)">
+      <div class="actor-icon">🔐</div>
+      <div class="actor-name" style="color:var(--yellow)">VOLD (Volume Daemon)</div>
+      <div class="actor-location">system/vold/</div>
+      <ul class="actor-role">
+        <li>Mounts and decrypts /data (FBE)</li>
+        <li>Must complete before COW files are accessible</li>
+        <li>Checks /data free space before OTA starts</li>
+        <li>GsiService: manages COW image loop devices</li>
+        <li>startCheckpoint(): enables dm-bow journaling before merge</li>
+        <li>commitChanges(): finalizes merge, disables checkpoint</li>
+        <li>abortChanges(): rolls back /data if merge fails</li>
+        <li>Prevents brick if power loss during merge</li>
+      </ul>
+    </div>
+
+    <div class="actor-card" style="border-color:var(--cyan)">
+      <div class="actor-icon">🚀</div>
+      <div class="actor-name" style="color:var(--cyan)">first_stage_init</div>
+      <div class="actor-location">system/core/init/first_stage_init.cpp</div>
+      <ul class="actor-role">
+        <li>Mounts /metadata early (unencrypted)</li>
+        <li>Reads snapshot_boot flag from /metadata</li>
+        <li>If snapshot_boot=true: calls SnapshotManager to rebuild dm-snapshot</li>
+        <li>Reconstructs all virtual partitions before mounting /system</li>
+        <li>Sets up dm-verity on top of dm-snapshot</li>
+        <li>Mounts /dev/block/dm-X as /system</li>
+        <li>All of this happens before second stage init!</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1.5rem">
+    <div class="card-title"><span class="dot" style="background:var(--green)"></span>VOLD's Role in Merge Safety — dm-bow Checkpoint</div>
+    <div class="highlight-box hb-red" style="margin-bottom:1rem">
+      ⚠️ <strong>The Merge Risk:</strong> During merge, COW ops are written into system_a. If power is lost midway — system_a is partially written (half old, half new data). system_a is now CORRUPTED. Device is BRICKED!
+    </div>
+    <div class="code-block"><span class="cm"># VOLD's checkpoint solution (dm-bow — Block Device Wrapper):</span>
+
+<span class="cm">BEFORE MERGE:</span>
+VOLD::<span class="cv">startCheckpoint</span>()
+<span class="cm"># Enables dm-bow on /data filesystem</span>
+<span class="cm"># Any write to /data is now journaled/checkpointed</span>
+<span class="cm"># If power loss → /data rolls back to last checkpoint</span>
+<span class="cm"># system_a is protected — merge hasn't started yet</span>
+
+<span class="cm">DURING MERGE (background):</span>
+<span class="cm"># SnapshotManager writes COW blocks into system_a</span>
+<span class="cm"># If power loss here → on next boot:</span>
+<span class="cm">#   dm-bow detects incomplete journal → rolls back /data</span>
+<span class="cm">#   system_a is still clean → falls back to snapshot reads</span>
+<span class="cm">#   Merge resumes from where it left off</span>
+
+<span class="cm">AFTER SUCCESSFUL MERGE:</span>
+VOLD::<span class="cv">commitChanges</span>()
+<span class="cm"># Marks checkpoint as committed</span>
+<span class="cm"># Disables dm-bow overhead</span>
+<span class="cm"># COW files deleted</span>
+<span class="cm"># /metadata update_state = MERGE_COMPLETED</span>
+
+<span class="cm">ON FAILURE:</span>
+VOLD::<span class="cv">abortChanges</span>()
+<span class="cm"># Rolls back any partial /data writes</span>
+<span class="cm"># Keeps snapshot alive → device still bootable</span></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 9: COMMON MISTAKES                             -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-corrections">
+  <div class="section-title">Common Misconceptions & Corrections</div>
+  <div class="section-sub">Key corrections from our discussion — these are exactly the kind of subtle points that come up in Staff Engineer interviews.</div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--red)"></span>Misconception 1 — "update_engine creates the COW file"</div>
+    <div class="code-block"><span class="ce">❌ WRONG:</span>
+update_engine creates COW device in /data,
+then asks SnapshotManager to create virtual partition.
+
+<span class="cs">✅ CORRECT:</span>
+SnapshotManager creates the COW file in /data.
+update_engine calls SnapshotManager::CreateUpdateSnapshots()
+and SnapshotManager does ALL of:
+  - Creating COW file via fallocate()
+  - Exposing it as block device via IImageManager
+  - Creating dm-snapshot kernel target
+  - Returning the virtual device path to update_engine
+
+update_engine never directly touches /data or creates files there.
+SnapshotManager owns all COW file management.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--red)"></span>Misconception 2 — "update_engine applies COW ops FROM COW device TO snapshot"</div>
+    <div class="code-block"><span class="ce">❌ WRONG:</span>
+update_engine reads COW operations from COW device
+and applies them to snapshot device.
+
+<span class="cs">✅ CORRECT:</span>
+update_engine WRITES new block data TO the snapshot device.
+The snapshot device (dm-snapshot) INTERNALLY routes those writes
+into the COW file.
+
+Flow:
+  update_engine → write block 42 → /dev/block/mapper/system_b-snapshot
+  dm-snapshot kernel target intercepts write
+  dm-snapshot → stores block 42's new data in COW file automatically
+  update_engine never knows about the COW file!</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--red)"></span>Misconception 3 — "No slot switch in VAB, always merges to system_a"</div>
+    <div class="code-block"><span class="ce">❌ WRONG:</span>
+In VAB, there is no slot switch. The update is always merged back into system_a.
+
+<span class="cs">✅ CORRECT:</span>
+BOTH slot switch AND merge happen — at different times!
+
+Timeline:
+  1. OTA applied to virtual slot_b snapshot
+  2. Bootloader metadata → SWITCHED to slot_b  ← slot switch DOES happen
+  3. Device reboots into virtual slot_b (snapshot = system_a + COW)
+  4. After successful boot → MERGE starts in background
+  5. COW ops written back into system_a → system_a becomes new version
+  6. COW files deleted
+  7. Next reboot: boots slot_b but slot_b now = updated system_a (no COW)
+
+The slot switch is real. The merge just happens AFTER the switch,
+converting system_a to contain the new data so slot_b doesn't
+need the COW overlay anymore.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--red)"></span>Misconception 4 — "vbmeta stores the full hash of each partition"</div>
+    <div class="code-block"><span class="ce">❌ WRONG:</span>
+vbmeta stores SHA256(entire /system partition) as a single hash.
+
+<span class="cs">✅ CORRECT:</span>
+For LARGE partitions (system, vendor, odm):
+  vbmeta stores the ROOT HASH of the Merkle tree
+  (top-most hash of the hash tree embedded in the partition)
+  NOT a direct hash of all 2GB
+
+For SMALL partitions (boot, dtbo):
+  vbmeta stores SHA256(entire partition) — direct full hash
+  Small partitions are cheap enough to hash fully.
+
+Why this matters:
+  If vbmeta stored full partition hash → must hash ALL 2GB at boot → slow!
+  With Merkle root hash → boot just trusts the root hash (already signed)
+  dm-verity verifies individual blocks lazily at read time using the tree.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--red)"></span>Misconception 5 — "dm-verity hashes the entire partition at setup time"</div>
+    <div class="code-block"><span class="ce">❌ WRONG:</span>
+When dm-verity target is created, it hashes the entire dm-linear device.
+
+<span class="cs">✅ CORRECT:</span>
+dm-verity does NOT hash anything at setup time.
+It is LAZY — it only verifies a block WHEN that block is actually read.
+
+The hash tree is PRE-BUILT at build time (by the build system)
+and PRE-EMBEDDED at the end of the partition image.
+
+At setup time: init just tells kernel "use THIS root hash from vbmeta"
+At read time:  dm-verity intercepts the block read, computes hash,
+               walks the tree, compares to root hash — all on-demand.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 10: read_block() TIMING                        -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-readblock">
+  <div class="section-title">When Does dm-snapshot read_block() Execute?</div>
+  <div class="section-sub">A common confusion — read_block() runs at NEITHER OTA write time NOR merge time. It runs at a third time entirely.</div>
+
+  <div class="highlight-box hb-green" style="margin-bottom:1.5rem">
+    🎯 <strong>Direct Answer:</strong> read_block() executes during <strong>Phase 2 — runtime</strong>, when the device is booted into virtual slot_b and ANY process reads ANY file from /system or /vendor. It is the <em>live serving mechanism</em>, not part of writing or merging.
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--blue)"></span>The Three Phases — What Happens in Each</div>
+    <div class="code-block"><span class="cv">PHASE 1 — OTA WRITING</span> (update_engine applies payload.bin):
+<span class="cm">══════════════════════════════════════════════════════════</span>
+update_engine WRITES blocks → dm-snapshot → COW file
+
+<span class="ce">read_block() is NOT called here.</span>
+Only WRITE path is active. dm-snapshot intercepts writes:
+  "new block 42 data" → stored into COW file on /data
+
+system_a is <span class="cn">never read or touched</span> during this phase.
+COW file is being POPULATED with new data.
+
+
+<span class="cv">PHASE 2 — RUNTIME</span> (device booted into virtual slot_b):
+<span class="cm">══════════════════════════════════════════════════════════</span>
+<span class="cs">THIS IS WHEN read_block() RUNS. Continuously. For every file access.</span>
+
+App opens /system/framework/framework.jar:
+  ext4 filesystem → "give me block 1"
+  dm-snapshot intercepts → <span class="cs">read_block(1)</span>:
+    block 1 in COW? YES (COW_REPLACE) → return new jar data ✓
+
+App opens /system/lib/libc.so (unchanged file):
+  ext4 → "give me block 100"
+  dm-snapshot → <span class="cs">read_block(100)</span>:
+    block 100 in COW? NO → read from system_a directly ✓
+
+App reads relocated file (COW_COPY entry):
+  ext4 → "give me block 5"
+  dm-snapshot → <span class="cs">read_block(5)</span>:
+    block 5 in COW? YES (COW_COPY src=2) → read system_a[2] ✓
+
+<span class="cm"># read_block() runs for EVERY SINGLE block read from /system</span>
+<span class="cm"># It runs SIMULTANEOUSLY with merge happening in background!</span>
+
+
+<span class="cv">PHASE 3 — MERGE</span> (background, while device is running):
+<span class="cm">══════════════════════════════════════════════════════════</span>
+SnapshotManager reads COW entries → writes into system_a directly.
+<span class="ce">This BYPASSES read_block() — it's a direct COW → system_a write.</span>
+SnapshotManager is the "renovation crew" not the "customer service."
+
+BUT read_block() is STILL running during merge!
+(Device is running, processes still reading files)
+
+As each block gets merged into system_a:
+  dm-snapshot updates in-memory COW lookup table:
+  "block 1 is now merged → remove from COW table"
+
+  Next read of block 1:
+    read_block(1) → COW says "merged" → read system_a[1]
+    system_a[1] now HAS new data → same result, transparent! ✓
+
+After merge complete: dm-snapshot dissolved → read_block() ceases to exist.
+All reads go directly to system_a via dm-verity ✓</div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--orange)"></span>The Customer Service Analogy</div>
+      <div class="highlight-box hb-orange">
+        <strong>read_block() = Customer Service Counter</strong><br><br>
+        Runs every day the store (device) is open.<br><br>
+        <strong>OTA writing = Restocking crew</strong> that worked the night before, filling the back room (COW file) with new stock (new block data).<br><br>
+        <strong>Merge = Renovation crew</strong> permanently moving stock from the back room (COW) to the main shelf (system_a). They don't go through the customer service counter — they have direct access.
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="dot" style="background:var(--purple)"></span>Summary — Who Does What</div>
+      <table>
+        <tr><th>Phase</th><th>dm-snapshot path</th><th>read_block()?</th></tr>
+        <tr>
+          <td>OTA Write</td>
+          <td>WRITE path — routes to COW</td>
+          <td style="color:var(--red)">❌ No</td>
+        </tr>
+        <tr>
+          <td>Runtime (booted)</td>
+          <td>READ path — serves files</td>
+          <td style="color:var(--green)">✅ YES — always</td>
+        </tr>
+        <tr>
+          <td>Merge (background)</td>
+          <td>Direct COW→system_a write</td>
+          <td style="color:var(--orange)">⚠ Still running in parallel for file reads</td>
+        </tr>
+        <tr>
+          <td>Post-merge</td>
+          <td>dm-snapshot dissolved</td>
+          <td style="color:var(--muted)">Gone — no longer exists</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--green)"></span>Timeline with read_block() Highlighted</div>
+    <div class="timeline">
+      <div class="tl-item">
+        <div class="tl-dot" style="border-color:var(--blue);color:var(--blue)">1</div>
+        <div class="tl-body">
+          <div class="tl-phase" style="color:var(--blue)">OTA Write Phase</div>
+          <div class="tl-title">update_engine writes COW ops</div>
+          <div class="tl-desc">dm-snapshot WRITE path is active. New block data flows from update_engine → dm-snapshot → COW file. system_a is untouched. read_block() is NOT invoked — only writes happen here.</div>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot" style="border-color:var(--muted);color:var(--muted)">↓</div>
+        <div class="tl-body"><div class="tl-desc" style="color:var(--muted)">Device reboots. first_stage_init rebuilds dm-snapshot from /metadata.</div></div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot" style="border-color:var(--green);color:var(--green)">2</div>
+        <div class="tl-body">
+          <div class="tl-phase" style="color:var(--green)">★ Runtime Phase — read_block() IS ALIVE HERE</div>
+          <div class="tl-title">Device running on virtual slot_b</div>
+          <div class="tl-desc">Every file access from /system triggers read_block(). New blocks served from COW. Unchanged blocks served from system_a. This is the live serving mechanism. Runs from first boot into snapshot until merge is complete and dm-snapshot is dissolved.</div>
+          <div class="code-block" style="font-size:0.67rem">┌─────────────────────────────────────────────────────┐
+│  read_block() RUNNING FOR EVERY /system FILE READ   │
+│                                                     │
+│  Block in COW (REPLACE) → served from COW file     │
+│  Block in COW (COPY)    → redirected to system_a   │
+│  Block in COW (ZERO)    → returns zeros             │
+│  Block NOT in COW       → served from system_a     │
+│                                                     │
+│  ←── MERGE happening in background simultaneously ──│
+│  As blocks merge: removed from COW lookup table    │
+│  → reads then go to system_a directly (same data)  │
+└─────────────────────────────────────────────────────┘</div>
+        </div>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot" style="border-color:var(--orange);color:var(--orange)">3</div>
+        <div class="tl-body">
+          <div class="tl-phase" style="color:var(--orange)">Merge Complete</div>
+          <div class="tl-title">dm-snapshot dissolved — read_block() ceases</div>
+          <div class="tl-desc">All COW data merged into system_a. dm-snapshot device removed. COW files deleted. All reads now go directly to system_a via dm-verity. read_block() no longer exists — the device is back to a simple, clean read path.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- SECTION 11: GPT & PARTITIONS                           -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div class="section" id="sec-gpt">
+  <div class="section-title">GPT Updates, VAB Partition Coverage & boot Size Growth</div>
+  <div class="section-sub">Can GPT be updated via OTA? Which partitions does VAB cover? What happens if boot grows too large?</div>
+
+  <!-- GPT SECTION -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--red)"></span>Can We Update the GPT Table via OTA?</div>
+    <div class="highlight-box hb-red" style="margin-bottom:1rem">
+      ⚠️ <strong>Physical GPT update via OTA: Almost NEVER done — extremely risky.</strong> But logical partition changes inside /super: YES, freely via OTA.
+    </div>
+    <div class="code-block"><span class="cm"># GPT (GUID Partition Table) lives at flash LBA 0 and LBA 1</span>
+<span class="cm"># Contains: list of ALL physical partitions with name, start LBA, end LBA, GUID</span>
+
+Flash layout:
+┌────────┬────────┬────────┬───────────────────────┬──────────┬──────────┐
+│  GPT   │ boot_a │ boot_b │       /super          │ userdata │ metadata │
+│ LBA 0  │        │        │ [system][vendor][odm] │          │          │
+└────────┴────────┴────────┴───────────────────────┴──────────┴──────────┘
+    ↑
+    Fixed at factory flash time.
+    Changing this = moving walls while people live in the building.</div>
+    <div style="margin-top:1rem">
+      <div style="font-size:0.78rem;font-weight:700;margin-bottom:0.8rem;color:var(--red)">Why Physical GPT Updates Are Dangerous</div>
+      <div class="cow-op" style="margin-bottom:0.7rem">
+        <div class="cow-op-header"><span class="badge badge-red">RISK 1</span><span class="cow-op-name">Bricking — No Recovery</span></div>
+        <div class="cow-op-desc">GPT lives at LBA 0. If power fails WHILE writing GPT → partition table is corrupted → bootloader can't find ANY partition → device is a permanent brick. No A/B fallback can save you (GPT is pre-A/B — it's what defines A/B!).</div>
+      </div>
+      <div class="cow-op" style="margin-bottom:0.7rem">
+        <div class="cow-op-header"><span class="badge badge-red">RISK 2</span><span class="cow-op-name">No Rollback Possible</span></div>
+        <div class="cow-op-desc">GPT has no slot_a/slot_b concept. There is only ONE GPT. If update fails → no way to go back. Everything else in Android has A/B rollback — but the GPT itself is the foundation that makes A/B possible.</div>
+      </div>
+      <div class="cow-op" style="margin-bottom:0.7rem">
+        <div class="cow-op-header"><span class="badge badge-red">RISK 3</span><span class="cow-op-name">Zero Free Space Between Partitions</span></div>
+        <div class="cow-op-desc">Flash is fully partitioned at factory time. Adding a new physical partition means needing unallocated space between existing partitions — which typically doesn't exist. Can't add new partition without shrinking another (risks data loss).</div>
+      </div>
+      <div class="cow-op">
+        <div class="cow-op-header"><span class="badge badge-red">RISK 4</span><span class="cow-op-name">Bootloader Dependency</span></div>
+        <div class="cow-op-desc">Qualcomm ABL/XBL reads GPT directly. If you change GPT without updating bootloader simultaneously → bootloader looks for "boot" at old LBA → finds wrong data → device won't boot. Requires atomic GPT+bootloader update which is extremely complex.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--green)"></span>How OEMs Add "New Partitions" via OTA — Dynamic Partitions</div>
+    <div class="highlight-box hb-green" style="margin-bottom:1rem">
+      💡 <strong>Analogy:</strong> Physical GPT is like the <strong>city zoning map</strong> — set in stone, very hard to change. But /super is like a <strong>large empty plot</strong> inside the city. You can build new buildings (logical partitions) inside that plot freely, without rezoning the whole city.
+    </div>
+    <div class="code-block"><span class="cm"># /super physical partition: fixed in GPT, NEVER changes</span>
+<span class="cm"># BUT logical partitions INSIDE /super: fully flexible via OTA!</span>
+
+LpMetadata (stored at start of /super — THIS is updatable via OTA):
+  partitions:
+    system_a:   offset=0,      size=900MB
+    vendor_a:   offset=900MB,  size=300MB
+    odm_a:      offset=1200MB, size=100MB
+    <span class="cs">system_ext_a: offset=1300MB, size=200MB</span>  ← NEW partition added via OTA!
+
+<span class="cm"># OTA update can:</span>
+<span class="cm">#   ADD new logical partition (e.g., system_ext) ✓</span>
+<span class="cm">#   REMOVE a logical partition ✓</span>
+<span class="cm">#   RESIZE a logical partition (grow/shrink) ✓</span>
+<span class="cm">#   All WITHOUT touching the physical GPT! ✓</span>
+
+Real example — Android 11 added system_ext:
+  Android 10 /super: [system_a][vendor_a][odm_a][FREE SPACE]
+  OTA to Android 11: [system_a][vendor_a][odm_a][system_ext_a][FREE]
+  Physical GPT:      ← UNCHANGED</div>
+    <div style="margin-top:1rem">
+      <div style="font-size:0.75rem;font-weight:700;margin-bottom:0.6rem;color:var(--muted)">When IS Physical GPT Updated? (Rare Cases)</div>
+      <div class="info-row"><span class="label">Factory re-flash</span>fastboot flash — entire device wiped, GPT rewritten from scratch. OK because device is in bootloader mode.</div>
+      <div class="info-row"><span class="label">retrofit_dynamic_partitions</span>Special one-time OTA migrating legacy → dynamic partitions. Requires fastbootd + userspace fastboot. Done once during platform migration.</div>
+      <div class="info-row"><span class="label">Qualcomm AAOS (rare)</span>Some platforms reserve "gpt_backup" partition. 2-stage update: Stage 1 = update bootloader + backup GPT. Stage 2 = update GPT with recovery fallback. Extremely platform-specific.</div>
+    </div>
+  </div>
+
+  <!-- VAB PARTITION COVERAGE -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--purple)"></span>VAB Applicability — Which Partitions Get What Treatment?</div>
+    <table>
+      <tr>
+        <th>Partition</th>
+        <th>A/B Slots?</th>
+        <th>VAB dm-snapshot?</th>
+        <th>How Updated</th>
+        <th>Notes</th>
+      </tr>
+      <tr>
+        <td><code>system_a/b</code></td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--green)">✓ Full VAB</td>
+        <td>dm-snapshot COW on /data</td>
+        <td>Logical in /super. Full COW machinery.</td>
+      </tr>
+      <tr>
+        <td><code>vendor_a/b</code></td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--green)">✓ Full VAB</td>
+        <td>dm-snapshot COW on /data</td>
+        <td>Logical in /super. Full COW machinery.</td>
+      </tr>
+      <tr>
+        <td><code>odm_a/b, product_a/b</code></td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--green)">✓ Full VAB</td>
+        <td>dm-snapshot COW on /data</td>
+        <td>Logical in /super.</td>
+      </tr>
+      <tr>
+        <td><code>boot_a/b</code></td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--orange)">⚠ Partial</td>
+        <td>Direct write to physical boot_b</td>
+        <td>Raw image — no filesystem, can't use dm-snapshot. Small enough for physical _b.</td>
+      </tr>
+      <tr>
+        <td><code>dtbo_a/b, vbmeta_a/b</code></td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--orange)">⚠ Partial</td>
+        <td>Direct write to physical _b slot</td>
+        <td>Small physical partitions. Direct write same as Classic A/B.</td>
+      </tr>
+      <tr>
+        <td><code>vendor_boot_a/b</code></td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--orange)">⚠ Partial</td>
+        <td>Direct write to physical _b slot</td>
+        <td>Android 12+ — vendor ramdisk + DTBs split from boot.</td>
+      </tr>
+      <tr>
+        <td><code>abl_a/b</code> (Qualcomm bootloader)</td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td>Direct write to abl_b</td>
+        <td>Cannot dm-snapshot a bootloader. Must be atomic with vbmeta update.</td>
+      </tr>
+      <tr>
+        <td><code>xbl_a/b</code> (Qualcomm primary BL)</td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td>Direct write to xbl_b</td>
+        <td>Primary bootloader. Physical slots, direct write only.</td>
+      </tr>
+      <tr>
+        <td><code>misc</code></td>
+        <td style="color:var(--red)">✗ No</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td>Atomic single write</td>
+        <td>Stores BCB (Boot Control Block) messages between bootloader/recovery. Too small and simple for A/B.</td>
+      </tr>
+      <tr>
+        <td><code>userdata</code> (/data)</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td>Never OTA'd</td>
+        <td>User data. Ironically hosts COW files during VAB OTA!</td>
+      </tr>
+      <tr>
+        <td><code>metadata</code></td>
+        <td style="color:var(--red)">✗ No</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td>Never OTA'd (it's the coordinator)</td>
+        <td>Can't snapshot the partition that coordinates snapshots!</td>
+      </tr>
+      <tr>
+        <td><code>modem_a/b</code> (Qualcomm)</td>
+        <td style="color:var(--green)">✓</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td>FOTA (Qualcomm-specific)</td>
+        <td>Updated via separate Qualcomm FOTA mechanism, not Android OTA payload.bin.</td>
+      </tr>
+      <tr>
+        <td><code>persist, frp</code></td>
+        <td style="color:var(--red)">✗ No</td>
+        <td style="color:var(--red)">✗ No</td>
+        <td>Never OTA'd</td>
+        <td>Device calibration, Factory Reset Protection. Must survive OTA unchanged.</td>
+      </tr>
+    </table>
+
+    <div class="highlight-box hb-cyan" style="margin-top:1rem">
+      <strong>Why misc has no A/B:</strong> misc is a tiny (~4KB) raw partition where bootloader and recovery exchange messages ("please boot into recovery", "OTA succeeded"). It has no filesystem, no concept of slots. Written atomically in single operations — too small and simple to need A/B protection.
+    </div>
+  </div>
+
+  <!-- BOOT PARTITION SIZE -->
+  <div class="card">
+    <div class="card-title"><span class="dot" style="background:var(--yellow)"></span>What If boot Partition Size Increases After Update?</div>
+    <div class="highlight-box hb-yellow" style="margin-bottom:1rem">
+      <strong>Physical boot_a and boot_b partition sizes are FIXED in GPT at factory time.</strong> They cannot grow via OTA. If a new Android version needs a bigger boot image than the physical partition allows → OTA fails safely. The active slot is completely untouched.
+    </div>
+
+    <div style="font-size:0.78rem;font-weight:700;margin-bottom:0.8rem;color:var(--text)">Does This Scenario Actually Exist? YES — History of boot Growth:</div>
+    <div class="code-block"><span class="cm"># Real boot image growth over Android versions:</span>
+
+Android 9:   boot.img = kernel + ramdisk                    ~32MB
+Android 10:  boot.img = kernel + ramdisk (recovery merged)  ~48MB  ← grew!
+Android 12:  boot.img = kernel + generic ramdisk            ~32MB  (split!)
+             vendor_boot.img = vendor ramdisk + DTBs        ~32MB  ← new!
+Android 13:  boot.img = kernel ONLY                         ~20MB
+             init_boot.img = generic ramdisk                ~8MB   ← new split!
+
+<span class="cm"># Each split was PARTLY motivated by physical partition size constraints!</span>
+<span class="cm"># "Can't make boot bigger → split contents across multiple smaller partitions"</span></div>
+
+    <div style="margin-top:1.2rem;font-size:0.78rem;font-weight:700;margin-bottom:0.8rem;color:var(--text)">What Happens If New boot Image &gt; Physical Partition Size?</div>
+    <div class="code-block"><span class="cm"># Scenario: factory allocated boot_a/boot_b = 64MB each</span>
+<span class="cm">#           New OTA has boot.img = 70MB (6MB over limit!)</span>
+
+update_engine tries to write to inactive boot_b:
+  ① writes first 64MB → OK
+  ② tries to write bytes 64–70MB → PARTITION FULL ❌
+  ③ update_engine returns ERROR: <span class="ce">"Failed to write boot partition: ENOSPC"</span>
+  ④ OTA fails entirely. Device stays on current version.
+  ⑤ failure reported to OTA server.
+
+<span class="cm"># SAFETY: write was to INACTIVE boot_b. boot_a (active) completely untouched.</span>
+<span class="cm"># Device is safe, still running old version. No bricking.</span></div>
+
+    <div style="margin-top:1.2rem;font-size:0.78rem;font-weight:700;margin-bottom:0.8rem;color:var(--text)">Android's Solutions for boot Size Growth:</div>
+    <div class="grid-2" style="margin-top:0.8rem">
+      <div class="cow-op">
+        <div class="cow-op-header"><span class="badge badge-green">Solution 1</span><span class="cow-op-name">Split Partitions</span></div>
+        <div class="cow-op-desc">If boot is too big → split it into boot + vendor_boot + init_boot. Each physical partition is smaller. Contents distributed across multiple slots. This is Android's PRIMARY strategy since Android 12.</div>
+        <div class="cow-op-example">Android 11: boot_a (64MB): kernel+ramdisk+vendor_ramdisk+DTBs
+Android 12: boot_a        (32MB): kernel + generic ramdisk
+            vendor_boot_a (32MB): vendor ramdisk + DTBs
+            init_boot_a   (8MB):  init ramdisk (Android 13)</div>
+      </div>
+      <div class="cow-op">
+        <div class="cow-op-header"><span class="badge badge-cyan">Solution 2</span><span class="cow-op-name">OEM Over-Provision at Factory</span></div>
+        <div class="cow-op-desc">OEM allocates much more space than current boot image needs. "Android grows — give it headroom." Current image: 48MB, partition allocated: 128MB. Future updates have room to grow without hitting the limit.</div>
+        <div class="cow-op-example">OEM factory flash:
+  boot_a: 128MB  (image currently 48MB — 80MB headroom)
+  boot_b: 128MB  (must always equal boot_a size!)</div>
+      </div>
+      <div class="cow-op">
+        <div class="cow-op-header"><span class="badge badge-purple">Solution 3</span><span class="cow-op-name">Compression</span></div>
+        <div class="cow-op-desc">boot.img uses LZ4/GZIP compression for the ramdisk. Kernel itself is compressed (Image.lz4, zImage). Decompressed at boot time by the bootloader. Same content, smaller footprint.</div>
+        <div class="cow-op-example">Uncompressed ramdisk: 32MB
+LZ4 compressed:       12MB  ← fits in smaller partition ✓</div>
+      </div>
+      <div class="cow-op">
+        <div class="cow-op-header"><span class="badge badge-orange">Solution 4</span><span class="cow-op-name">Move Content to /super (Logical)</span></div>
+        <div class="cow-op-desc">The architectural trend: move everything possible FROM physical partitions (boot, vendor_boot) TO logical partitions in /super (vendor, odm). Physical partitions = only what MUST be physical (kernel). Everything else → flexible /super.</div>
+        <div class="cow-op-example">Goal: boot_a = kernel ONLY (tiny, stable, rarely changes)
+       vendor content → vendor_a (logical in /super, flexible size!)
+       This is the long-term Android architecture direction.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:1.2rem;background:var(--bg3)">
+      <div class="card-title"><span class="dot" style="background:var(--cyan)"></span>Qualcomm AAOS — DTBO Growth Problem</div>
+      <div class="info-row"><span class="label">Why DTBO grows</span>More peripherals (displays, sensors), new hardware variants, growing CAN/SOME-IP device trees with each AAOS release.</div>
+      <div class="info-row"><span class="label">Qualcomm solution 1</span>dtbo partition pre-allocated generously (32–64MB) at factory.</div>
+      <div class="info-row"><span class="label">Qualcomm solution 2</span>DTBO overlays moved inside vendor_boot partition.</div>
+      <div class="info-row"><span class="label">Qualcomm solution 3</span>Separate dtbo per hardware variant, selected at boot via <code>androidboot.dtbo_idx</code> kernel cmdline parameter.</div>
+    </div>
+
+    <div class="highlight-box hb-cyan" style="margin-top:1rem">
+      <strong>Architectural Rule:</strong> Logical partitions in /super → sizes are FLEXIBLE (grow/shrink/add/remove via LpMetadata). Physical partitions (boot, abl, dtbo) → sizes are FIXED in GPT. The trend is continuously moving content from physical → logical to gain flexibility.
+    </div>
+  </div>
+</div>
+
+</div><!-- end .content -->
+
+<script>
+// ── TAB NAVIGATION ──
+function showTab(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('sec-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ── STATE MACHINE ──
+const stateDetails = [
+  '<strong style="color:var(--green)">NONE</strong> — Normal operation. No update in progress. /metadata/ota/update_state = "none". Device boots normally from physical partitions without any COW overlay.',
+  '<strong style="color:var(--cyan)">INITIATED</strong> — update_engine called SnapshotManager::CreateUpdateSnapshots(). COW files pre-allocated on /data via fallocate(). dm-snapshot virtual devices created. /metadata updated with partition snapshot info. update_engine is now writing COW operations.',
+  '<strong style="color:var(--yellow)">UNVERIFIED</strong> — update_engine finished writing all COW operations. FinishedSnapshotWrites() called. Bootloader slot metadata switched to slot_b. Device has NOT yet booted into the new snapshot. If something goes wrong here, slot_a is still available for rollback.',
+  '<strong style="color:var(--blue)">VERIFIED</strong> — Device successfully rebooted into virtual slot_b (dm-snapshot). first_stage_init rebuilt snapshot devices from /metadata. System is running from system_a + COW overlay. Boot was successful — merge can now safely begin.',
+  '<strong style="color:var(--orange)">MERGING</strong> — SnapshotManager is writing COW operations back into system_a blocks in the background. VOLD checkpoint (dm-bow) is active — protects against power loss. Device is running normally while merge happens. This phase can take minutes on large partitions.',
+  '<strong style="color:var(--purple)">MERGE_COMPLETED</strong> — All COW operations have been merged into system_a. system_a now contains the fully updated partition data. COW files on /data are deleted (space freed!). dm-snapshot devices are dissolved. VOLD::commitChanges() called. Next reboot uses system_a directly with no COW overhead.',
+];
+function selectState(idx) {
+  document.querySelectorAll('.state-node').forEach((n,i) => n.classList.toggle('active-state', i === idx));
+  document.getElementById('state-detail').innerHTML = stateDetails[idx] || stateDetails[0];
+}
+
+// ── INTERACTIVE FLOW ──
+const flowSteps = [
+  {
+    phase: 'Build Server', badge: 'badge-blue', title: 'payload.bin Generation',
+    desc: 'On Google/OEM build servers, delta_generator compares old and new system images. It computes all block-level differences and encodes them as COW operations (REPLACE, COPY, ZERO). Critically for VAB, it also calculates estimate_cow_size and sets cow_version=2. The result is payload.bin — shipped to the device via OTA server.',
+    detail: `delta_generator \\
+  --new_image=system_android14.img \\
+  --old_image=system_android13.img \\
+  → outputs payload.bin with:
+      cow_version: 2
+      estimate_cow_size: 204800000  (200MB)
+      operations: [COW_REPLACE×50000, COW_COPY×10000, COW_ZERO×5000]`,
+    active: ['blk-payload'], dim: []
+  },
+  {
+    phase: 'Device — OTA Download', badge: 'badge-green', title: 'update_engine Downloads & Parses',
+    desc: 'update_engine (running as a system service) downloads payload.bin from the OTA server. It parses the manifest, reads estimate_cow_size per partition, and then calls SnapshotManager::CreateUpdateSnapshots(), passing the size estimates. update_engine does NOT create any COW files itself.',
+    detail: `update_engine:
+  ① downloads payload.bin from OTA server
+  ② parses manifest: cow_version=2, estimate_cow_size=200MB
+  ③ calls SnapshotManager::CreateUpdateSnapshots(manifest)
+  ④ waits for SnapshotManager to return virtual device path`,
+    active: ['blk-ue', 'blk-payload'], dim: []
+  },
+  {
+    phase: 'Device — COW Setup', badge: 'badge-orange', title: 'SnapshotManager Creates COW Infrastructure',
+    desc: 'SnapshotManager takes over. It: (1) creates the COW file on /data via fallocate — pre-allocating all needed space upfront so the OTA cannot fail mid-write due to space. (2) Exposes the COW file as a block device via IImageManager/loop device. (3) Creates the dm-snapshot kernel target combining system_a + COW block device.',
+    detail: `SnapshotManager:
+  ① open("/data/gsi/ota/system_cow", O_CREAT)
+     fallocate(fd, 0, 0, 200MB)  ← pre-allocate!
+  ② IImageManager::MapImageDevice("system_a-cow-img")
+     → /dev/block/mapper/system_a-cow-img (loop device)
+  ③ dmsetup create system_b-snapshot --table
+     "0 1843200 snapshot \\
+      /dev/block/mapper/system_a \\
+      /dev/block/mapper/system_a-cow-img P 8"
+  ④ returns "/dev/block/mapper/system_b-snapshot" to update_engine`,
+    active: ['blk-sm', 'blk-cow', 'blk-loop', 'blk-snap'], dim: []
+  },
+  {
+    phase: 'Device — OTA Write', badge: 'badge-orange', title: 'update_engine Writes COW Operations',
+    desc: 'update_engine opens /dev/block/mapper/system_b-snapshot and writes block data through it. The dm-snapshot kernel target intercepts each write and routes new block data into the COW file. Unchanged blocks require no COW entry — they will be read from system_a at runtime. COW_LABEL checkpoints are written periodically for resume support.',
+    detail: `update_engine writes to /dev/block/mapper/system_b-snapshot:
+  block[1]  = new framework.jar data → dm-snapshot → COW file
+  block[3]  = new build.prop data    → dm-snapshot → COW file
+  block[5]  = COW_COPY(src=2)        → COW file (metadata only)
+  block[2]  = COW_ZERO               → COW file (metadata only)
+  [COW_LABEL: seq=500]               → checkpoint marker
+  ...
+  system_a is NEVER touched during this phase!`,
+    active: ['blk-ue', 'blk-snap', 'blk-cow'], dim: ['blk-payload']
+  },
+  {
+    phase: 'Device — Pre-Reboot', badge: 'badge-purple', title: 'Metadata Written & Slot Switched',
+    desc: 'update_engine calls SnapshotManager::FinishedSnapshotWrites(). SnapshotManager writes all snapshot metadata to /metadata (partition sizes, state=UNVERIFIED, COW file paths). Finally, the bootloader slot metadata is updated to slot_b. The device is now ready to reboot into the new system via the virtual snapshot.',
+    detail: `/metadata/ota/update_state = "UNVERIFIED"
+/metadata/ota/snapshots/system_a:
+  cow_file_size: 204800000
+  status: UNVERIFIED
+
+bootloader slot metadata:
+  current_slot: b    ← SLOT SWITCHED!
+  slot_b.successful: false  (not yet verified)
+  slot_b.tries_remaining: 7`,
+    active: ['blk-meta', 'blk-sm'], dim: ['blk-cow', 'blk-payload']
+  },
+  {
+    phase: 'Boot — First Stage Init', badge: 'badge-cyan', title: 'Snapshot Devices Rebuilt After Reboot',
+    desc: 'Device reboots. first_stage_init starts before /system or /data are mounted. It mounts /metadata (unencrypted — always accessible). Reads snapshot_boot=true. Calls SnapshotManager to rebuild all dm-snapshot devices using metadata from /metadata. /data is still encrypted — COW files not directly readable yet — snapuserd handles this.',
+    detail: `first_stage_init sequence:
+  ① mount /metadata (unencrypted, always accessible)
+  ② read /metadata/ota/snapshot_boot = true
+  ③ SnapshotManager::RecoveryCreateSnapshotDevices()
+     → rebuild dm-snapshot for system, vendor
+  ④ set up dm-verity on top of dm-snapshot
+  ⑤ mount /dev/block/dm-X → /system
+  (all before second stage init!)`,
+    active: ['blk-init', 'blk-meta', 'blk-snap', 'blk-verity'], dim: ['blk-ue', 'blk-payload']
+  },
+  {
+    phase: 'Running — New OS', badge: 'badge-green', title: 'Device Boots Into Virtual slot_b',
+    desc: 'The device is now running Android from virtual slot_b — which is system_a + COW overlay served by dm-snapshot. Every block read checks COW first, then falls back to system_a. The user sees the new Android version. If boot fails, the bootloader automatically falls back to slot_a (rollback).',
+    detail: `Every block read from /system goes through:
+  dm-verity → dm-snapshot → decision:
+  
+  Read block[1]? → COW has entry → return new framework.jar ✓
+  Read block[0]? → no COW entry → read from system_a ✓
+  Read block[5]? → COW_COPY     → read system_a[2] ✓
+  Read block[7]? → COW_ZERO     → return zeros ✓
+  
+  /metadata/ota/update_state = "VERIFIED" (after successful boot)
+  Bootloader marks slot_b.successful = true`,
+    active: ['blk-verity', 'blk-snap', 'blk-sysA', 'blk-cow'], dim: ['blk-meta', 'blk-init']
+  },
+  {
+    phase: 'Background — Merge', badge: 'badge-yellow', title: 'SnapshotManager Merges COW → system_a',
+    desc: 'After verified boot, SnapshotManager starts the background merge. VOLD::startCheckpoint() is called first — enabling dm-bow journaling to protect against power loss. Then for each COW entry: REPLACE ops write new block data into system_a; COPY ops copy source blocks; ZERO ops zero out blocks. Device continues running normally during this process.',
+    detail: `VOLD::startCheckpoint()   ← enable dm-bow protection
+/metadata/ota/update_state = "MERGING"
+
+for each COW entry in system_cow:
+  COW_REPLACE{block:1, data:...}  → write new data to system_a[1]
+  COW_REPLACE{block:3, data:...}  → write new data to system_a[3]
+  COW_COPY{src:2, dst:5}          → copy system_a[2] to system_a[5]
+  COW_ZERO{block:2}               → zero out system_a[2]
+  
+Device is running normally throughout! (no user impact)
+If power loss → dm-bow rolls back → merge resumes next boot`,
+    active: ['blk-sm', 'blk-sysA', 'blk-cow'], dim: ['blk-verity', 'blk-snap']
+  },
+  {
+    phase: 'Complete — Post Merge', badge: 'badge-purple', title: 'Merge Complete — COW Dissolved',
+    desc: 'All COW operations have been written into system_a. system_a now contains the complete updated Android version. VOLD::commitChanges() is called — dm-bow journaling disabled. COW files on /data are deleted — storage freed! dm-snapshot devices are dissolved. Next reboot boots slot_b pointing directly to updated system_a with no COW overhead.',
+    detail: `VOLD::commitChanges()   ← commit, disable dm-bow
+/metadata/ota/update_state = "MERGE_COMPLETED"
+
+delete /data/gsi/ota/system_cow     ← ~200MB freed on /data!
+delete /data/gsi/ota/vendor_cow     ← ~50MB freed!
+dmsetup remove system_b-snapshot    ← virtual device dissolved
+IImageManager::DeleteImageDevice()  ← loop device removed
+
+Next reboot:
+  slot_b → /dev/block/mapper/system_b → dm-linear → system_a (updated)
+  No COW. No snapshot. Direct dm-verity on real partition. ✓`,
+    active: ['blk-sysA', 'blk-verity'], dim: ['blk-cow', 'blk-snap', 'blk-sm', 'blk-ue']
+  },
+];
+
+const flowVizBlocks = [
+  { id: 'blk-payload', name: 'payload.bin',          path: '(OTA server / download)',   color: 'var(--blue)',   desc: 'COW ops + estimate_cow_size' },
+  { id: 'blk-ue',     name: 'update_engine',         path: 'system service',            color: 'var(--blue)',   desc: 'Orchestrates OTA application' },
+  { id: 'blk-sm',     name: 'SnapshotManager',       path: 'libsnapshot',              color: 'var(--green)',  desc: 'Creates COW + dm-snapshot' },
+  { id: 'blk-cow',    name: 'COW File',              path: '/data/gsi/ota/system_cow', color: 'var(--orange)', desc: 'Stores only changed blocks' },
+  { id: 'blk-loop',   name: 'Loop Device (IImageMgr)',path:'/dev/block/mapper/system_a-cow-img',color:'var(--orange)',desc:'COW file → block device adapter'},
+  { id: 'blk-snap',   name: 'dm-snapshot',           path: '/dev/block/mapper/system_b-snapshot', color: 'var(--purple)', desc: 'Virtual system_b = system_a + COW' },
+  { id: 'blk-sysA',   name: 'system_a (origin)',     path: '/dev/block/mapper/system_a', color: 'var(--cyan)',  desc: 'Unchanged during OTA, read-only' },
+  { id: 'blk-verity', name: 'dm-verity',             path: '/dev/block/dm-X',           color: 'var(--purple)', desc: 'Block-level integrity verification' },
+  { id: 'blk-meta',   name: '/metadata',             path: 'snapshot state + config',  color: 'var(--yellow)', desc: 'Unencrypted, survives reboot' },
+  { id: 'blk-init',   name: 'first_stage_init',      path: 'ramdisk → early boot',     color: 'var(--cyan)',   desc: 'Rebuilds snapshot before /system mount' },
+];
+
+function renderFlowViz(stepIdx) {
+  const step = flowSteps[stepIdx];
+  const viz = document.getElementById('flow-viz');
+  viz.innerHTML = flowVizBlocks.map(b => {
+    const isActive = step.active.includes(b.id);
+    const isDim = step.dim.includes(b.id);
+    return `<div class="viz-block ${isActive?'active-viz':''} ${isDim?'dim-viz':''}" 
+      style="border-color:${b.color};color:${b.color}">
+      <div class="vb-name">${b.name}</div>
+      <div class="vb-path">${b.path}</div>
+      <div class="vb-detail" style="color:var(--muted)">${b.desc}</div>
+    </div>`;
+  }).join('<div class="viz-arrow">·</div>');
+}
+
+function renderFlowInfo(stepIdx) {
+  const step = flowSteps[stepIdx];
+  const info = document.getElementById('flow-info');
+  info.innerHTML = `
+    <div class="flow-phase-badge"><span class="badge ${step.badge}">${step.phase}</span></div>
+    <div class="flow-phase-title">${step.title}</div>
+    <div class="flow-phase-desc">${step.desc}</div>
+    <div class="flow-detail-box">${step.detail}</div>
+  `;
+}
+
+let flowCurrent = 0;
+function renderFlow() {
+  renderFlowViz(flowCurrent);
+  renderFlowInfo(flowCurrent);
+  document.getElementById('fstep').textContent = `Step ${flowCurrent+1} / ${flowSteps.length}`;
+  document.getElementById('fprev').disabled = flowCurrent === 0;
+  document.getElementById('fnext').disabled = flowCurrent === flowSteps.length - 1;
+}
+function flowNext() { if (flowCurrent < flowSteps.length-1) { flowCurrent++; renderFlow(); } }
+function flowPrev() { if (flowCurrent > 0) { flowCurrent--; renderFlow(); } }
+function flowReset() { flowCurrent = 0; renderFlow(); }
+
+// Init
+renderFlow();
+selectState(0);
+</script>
+</body>
+</html>
